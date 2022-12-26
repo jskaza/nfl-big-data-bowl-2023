@@ -7,6 +7,7 @@ library(purrr)
 library(fs)
 library(furrr)
 library(future)
+
 plan(multisession, workers = 4)
 # data frame per worker
 
@@ -117,21 +118,4 @@ res <- test |>
     .progress = T
   ) |>
   bind_rows()
-# add in play variables after for efficiency?
-
-library(keras)
-
-Y <- res$coords
-X <- res$opponent_coords
-
-model <- keras_model_sequential() |> 
-  layer_lstm(units = 32, input_shape = c(2)) |> 
-  layer_dense(units = 2, activation = 'linear')
-
-# Define the loss function and the optimizer
-model |> compile(loss = 'mean_squared_error', optimizer = 'adam')
-
-
-
-
 # add in play variables after for efficiency?
