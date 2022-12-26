@@ -7,9 +7,9 @@ library(purrr)
 library(fs)
 library(furrr)
 library(future)
+library(jsonlite)
 
 plan(multisession, workers = 4)
-# data frame per worker
 
 files <- dir_ls(glob = "data/week*csv", recurse = T)
 tracking <- vroom(files)
@@ -20,6 +20,13 @@ names(pff) <- to_snake_case(names(pff))
 
 players <- vroom("data/players.csv")
 names(players) <- to_snake_case(names(players))
+
+games <- vroom("data/games.csv")
+names(games) <- to_snake_case(names(games))
+
+# parser guesses wrong for cols 20-21
+plays <- vroom("data/plays.csv")
+names(plays) <- to_snake_case(names(plays))
 
 distance <- function(coord1, coord2) {
   sqrt((coord2[[1]] - coord1[[1]]) ^ 2 + (coord2[[2]] - coord1[[2]]) ^ 2)
@@ -78,7 +85,8 @@ terminal_events <- c(
   "qb_strip_sack"
 )
 
-test <- tracking |>
+df <- tracking |>
+  head(5000) |>
   select(game_id,
          play_id,
          nfl_id,
@@ -88,17 +96,15 @@ test <- tracking |>
          x,
          y,
          event) |>
-  mutate(coords = map2(x, y, \(x, y) list(x, y))) |>
-  select(-x, -y) |>
+  mutate(coords = map2(x, y, \(x, y) c(x, y))) |>
+  select(-x,-y) |>
   group_by(game_id, play_id) |>
   mutate(snap_id = frame_id[str_detect(event, "ball_snap")][1],
          end_id = frame_id[event %in% terminal_events][1]) |>
   filter(frame_id >= snap_id & frame_id <= end_id) |>
   ungroup() |>
-  left_join(
-    select(pff, game_id, play_id, nfl_id, pff_role, pff_position_lined_up),
-    by = c("game_id", "play_id", "nfl_id")
-  ) |>
+  left_join(select(pff, game_id, play_id, nfl_id, pff_role),
+            by = c("game_id", "play_id", "nfl_id")) |>
   replace_na(list(nfl_id = 0)) |> # the ball
   filter(pff_role %in% c("Pass Block", "Pass Rush") |
            nfl_id == 0) |>
@@ -107,9 +113,7 @@ test <- tracking |>
   filter(any(pff_role == "Pass Rush")) |>
   group_split()
 
-# filter(game_id == 2021090900, play_id == 97, frame_id == 7)
-
-res <- test |>
+df |>
   future_map(
     \(x) expand_frame(x) |>
       group_split() |>
@@ -117,5 +121,30 @@ res <- test |>
       left_join(x, by = "nfl_id"),
     .progress = T
   ) |>
-  bind_rows()
-# add in play variables after for efficiency?
+  bind_rows() |>
+  left_join(
+    select(pff, pff_position_lined_up, game_id, play_id, nfl_id),
+    by = c("game_id", "play_id", "nfl_id")
+  ) |>
+  left_join(select(games, home_team_abbr, game_id), by = c("game_id")) |>
+  left_join(
+    select(
+      plays,
+      quarter,
+      down,
+      yards_to_go,
+      game_clock,
+      pre_snap_home_score,
+      pre_snap_visitor_score,
+      absolute_yardline_number,
+      personnel_o,
+      defenders_in_box,
+      offense_formation,
+      game_id,
+      play_id
+    ),
+    by = c("game_id", "play_id")
+  ) |>
+  # extract meaningful features from coords, calculate score_delta, etc
+  toJSON() |>
+  write("data/dataset.json")
