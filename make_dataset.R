@@ -11,17 +11,21 @@ library(jsonlite)
 
 plan(multisession, workers = 4)
 
-files <- dir_ls(glob = "data/week*csv", recurse = T)
+files <-
+  dir_ls(paste0(Sys.getenv("BIG_DATA_BOWL"), "data"), regexp = "week")
 tracking <- vroom(files)
 names(tracking) <- to_snake_case(names(tracking))
 
-pff <- vroom("data/pffScoutingData.csv")
+pff <-
+  vroom(paste0(Sys.getenv("BIG_DATA_BOWL"), "data/pffScoutingData.csv"))
 names(pff) <- to_snake_case(names(pff))
 
-players <- vroom("data/players.csv")
+players <-
+  vroom(paste0(Sys.getenv("BIG_DATA_BOWL"), "data/players.csv"))
 names(players) <- to_snake_case(names(players))
 
-games <- vroom("data/games.csv")
+games <-
+  vroom(paste0(Sys.getenv("BIG_DATA_BOWL"), "data/games.csv"))
 names(games) <- to_snake_case(names(games))
 
 # parser guesses wrong for cols 20-21
@@ -52,7 +56,6 @@ expand_frame <- function(df) {
       ),
       dist = vectorized_distance(coords_1, coords_2)
     ) |>
-    # select(a, b, opponent, coords2, dist) |>
     group_by(player_1) |>
     arrange(object, dist)
 }
@@ -85,8 +88,7 @@ terminal_events <- c(
   "qb_strip_sack"
 )
 
-df <- tracking |>
-  head(5000) |>
+tracking |>
   select(game_id,
          play_id,
          nfl_id,
@@ -96,24 +98,29 @@ df <- tracking |>
          x,
          y,
          event) |>
-  mutate(coords = map2(x, y, \(x, y) c(x, y))) |>
-  select(-x,-y) |>
   group_by(game_id, play_id) |>
   mutate(snap_id = frame_id[str_detect(event, "ball_snap")][1],
          end_id = frame_id[event %in% terminal_events][1]) |>
   filter(frame_id >= snap_id & frame_id <= end_id) |>
+  replace_na(list(nfl_id = 0)) |> # the ball
+  mutate(
+    # should coordinates be relative to each player?
+    ball_start_x = x[nfl_id == 0][1],
+    ball_start_y = y[nfl_id == 0][1],
+    standard_y = if_else(play_direction == "right", -(x - ball_start_x), x - ball_start_x),
+    standard_x = if_else(play_direction == "left", -(y - ball_start_y), y - ball_start_y),
+    coords = map2(standard_x, standard_y, \(x, y) c(x, y))
+  ) |>
+  select(-x, -y, -ball_start_x, -ball_start_y, -standard_x, -standard_y) |>
   ungroup() |>
   left_join(select(pff, game_id, play_id, nfl_id, pff_role),
             by = c("game_id", "play_id", "nfl_id")) |>
-  replace_na(list(nfl_id = 0)) |> # the ball
   filter(pff_role %in% c("Pass Block", "Pass Rush") |
            nfl_id == 0) |>
   group_by(game_id, play_id, frame_id) |>
   # remove plays with no rushers
   filter(any(pff_role == "Pass Rush")) |>
-  group_split()
-
-df |>
+  group_split() |>
   future_map(
     \(x) expand_frame(x) |>
       group_split() |>
@@ -133,7 +140,7 @@ df |>
       quarter,
       down,
       yards_to_go,
-      game_clock,
+      # game_clock,
       pre_snap_home_score,
       pre_snap_visitor_score,
       absolute_yardline_number,
@@ -145,6 +152,15 @@ df |>
     ),
     by = c("game_id", "play_id")
   ) |>
-  # extract meaningful features from coords, calculate score_delta, etc
+  mutate(
+    score_delta = if_else(
+      team == home_team_abbr,
+      pre_snap_home_score - pre_snap_visitor_score,
+      pre_snap_visitor_score - pre_snap_home_score
+    )
+  ) |>
+  select(
+    -team,-play_direction,-event,-snap_id,-end_id,-pff_role,-home_team_abbr,-pre_snap_home_score,-pre_snap_visitor_score
+  ) |>
   toJSON() |>
-  write("data/dataset.json")
+  write(paste0(Sys.getenv("BIG_DATA_BOWL"), "data/dataset.json"))
