@@ -29,7 +29,8 @@ games <-
 names(games) <- to_snake_case(names(games))
 
 # parser guesses wrong for cols 20-21
-plays <- vroom("data/plays.csv")
+plays <-
+  vroom(paste0(Sys.getenv("BIG_DATA_BOWL"), "data/plays.csv"))
 names(plays) <- to_snake_case(names(plays))
 
 distance <- function(coord1, coord2) {
