@@ -12,7 +12,7 @@ library(jsonlite)
 plan(multisession, workers = 4)
 
 files <-
-  dir_ls(paste0(Sys.getenv("BIG_DATA_BOWL"), "data"), regexp = "week")
+  dir_ls(paste0(Sys.getenv("BIG_DATA_BOWL"), "data"), regexp = "week.*csv")
 tracking <- vroom(files)
 names(tracking) <- to_snake_case(names(tracking))
 
@@ -33,8 +33,8 @@ plays <-
   vroom(paste0(Sys.getenv("BIG_DATA_BOWL"), "data/plays.csv"))
 names(plays) <- to_snake_case(names(plays))
 
-distance <- function(coord1, coord2) {
-  sqrt((coord2[[1]] - coord1[[1]]) ^ 2 + (coord2[[2]] - coord1[[2]]) ^ 2)
+distance <- function(x1, y1, x2, y2) {
+  sqrt((x2 - x1) ^ 2 + (y2 - y1) ^ 2)
 }
 vectorized_distance <- Vectorize(distance)
 
@@ -43,7 +43,7 @@ expand_frame <- function(df) {
     filter(player_1 != player_2) |>
     left_join(df, by = c("player_1" = "nfl_id")) |>
     left_join(
-      select(df, nfl_id, coords, team),
+      select(df, nfl_id, x, y, team),
       by = c("player_2" = "nfl_id"),
       suffix = c("_1", "_2")
     ) |>
@@ -55,25 +55,36 @@ expand_frame <- function(df) {
         if_else(team_1 != team_2, "opponent",
                 "teammate")
       ),
-      dist = vectorized_distance(coords_1, coords_2)
+      dist = vectorized_distance(x_1, y_1, x_2, y_2)
     ) |>
     group_by(player_1) |>
     arrange(object, dist)
 }
 
 consolidate_frame <- function(df) {
-  opponent_coords <- df$coords_2[df$object == "opponent"]
-  teammate_coords <- df$coords_2[df$object == "teammate"]
-  ball_coords <- df$coords_2[df$object == "ball"]
+  opponent_x <- df$x_2[df$object == "opponent"]
+  opponent_y <- df$y_2[df$object == "opponent"]
+  teammate_x <- df$x_2[df$object == "teammate"]
+  teammate_y <- df$y_2[df$object == "teammate"]
+  ball_x <- df$x_2[df$object == "ball"]
+  ball_y <- df$y_2[df$object == "ball"]
   
-  return(
-    tibble(
-      nfl_id = df$player_1[1],
-      opponent_coords = list(opponent_coords),
-      teammate_coords = list(teammate_coords),
-      ball_coords = ball_coords
-    )
-  )
+  names(opponent_x) <- paste0("opponent_x_", 1:length(opponent_x))
+  names(opponent_y) <- paste0("opponent_y_", 1:length(opponent_y))
+  names(teammate_x) <- paste0("teammate_x_", 1:length(teammate_x))
+  names(teammate_y) <- paste0("teammate_y_", 1:length(teammate_y))
+  
+  coordinate_cols <-
+    c(opponent_x, opponent_y, teammate_x, teammate_y)
+  
+  data <- tibble(nfl_id = df$player_1[1],
+                 ball_x = ball_x,
+                 ball_y = ball_y)
+  
+  sapply(1:length(coordinate_cols), function(i)
+    data[1, names(coordinate_cols)[i]] <<- coordinate_cols[i])
+  
+  return(as_tibble(data))
 }
 
 terminal_events <- c(
@@ -110,14 +121,30 @@ tracking |>
     ball_start_y = y[nfl_id == 0][1],
     standard_y = if_else(play_direction == "right", -(x - ball_start_x), x - ball_start_x),
     standard_x = if_else(play_direction == "left", -(y - ball_start_y), y - ball_start_y),
-    coords = map2(standard_x, standard_y, \(x, y) c(x, y))
+    # coords = map2(standard_x, standard_y, \(x, y) c(x, y))
   ) |>
-  select(-x, -y, -ball_start_x, -ball_start_y, -standard_x, -standard_y) |>
+  # select(-x, -y, -ball_start_x, -ball_start_y, -standard_x, -standard_y) |>
+  select(-ball_start_x, -ball_start_y, -x, -y) |>
+  rename(x = standard_x, y = standard_y) |>
   ungroup() |>
-  left_join(select(pff, game_id, play_id, nfl_id, pff_role),
-            by = c("game_id", "play_id", "nfl_id")) |>
-  filter(pff_role %in% c("Pass Block", "Pass Rush") |
-           nfl_id == 0) |>
+  left_join(
+    select(
+      pff,
+      game_id,
+      play_id,
+      nfl_id,
+      pff_role,
+      pff_hurry,
+      pff_hit,
+      pff_sack
+    ),
+    by = c("game_id", "play_id", "nfl_id")
+  ) |>
+  mutate(pff_no_impact = if_else(pff_hurry == 0 &
+                                   pff_hit == 0 &
+                                   pff_sack == 0, 1, 0)) |>
+  # filter(pff_role %in% c("Pass Block", "Pass Rush") |
+  #          nfl_id == 0) |>
   group_by(game_id, play_id, frame_id) |>
   # remove plays with no rushers
   filter(any(pff_role == "Pass Rush")) |>
@@ -130,10 +157,8 @@ tracking |>
     .progress = T
   ) |>
   bind_rows() |>
-  left_join(
-    select(pff, pff_position_lined_up, game_id, play_id, nfl_id),
-    by = c("game_id", "play_id", "nfl_id")
-  ) |>
+  left_join(select(pff, game_id, play_id, nfl_id),
+            by = c("game_id", "play_id", "nfl_id")) |>
   left_join(select(games, home_team_abbr, game_id), by = c("game_id")) |>
   left_join(
     select(
@@ -145,9 +170,6 @@ tracking |>
       pre_snap_home_score,
       pre_snap_visitor_score,
       absolute_yardline_number,
-      personnel_o,
-      defenders_in_box,
-      offense_formation,
       game_id,
       play_id
     ),
