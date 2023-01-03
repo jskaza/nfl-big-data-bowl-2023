@@ -7,10 +7,9 @@ library(purrr)
 library(fs)
 library(purrr)
 library(jsonlite)
-library(forcats)
 
 files <-
-  dir_ls(paste0(Sys.getenv("BIG_DATA_BOWL"), "data"), regexp = "week1.csv")
+  dir_ls(paste0(Sys.getenv("BIG_DATA_BOWL"), "data"), regexp = "week.*.csv")
 tracking <- vroom(files)
 names(tracking) <- to_snake_case(names(tracking))
 
