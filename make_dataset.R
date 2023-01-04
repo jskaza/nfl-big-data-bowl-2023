@@ -7,6 +7,10 @@ library(purrr)
 library(fs)
 library(purrr)
 library(jsonlite)
+library(data.table)
+library(Rcpp)
+
+sourceCpp("min_dists.cpp")
 
 files <-
   dir_ls(paste0(Sys.getenv("BIG_DATA_BOWL"), "data"), regexp = "week.*.csv")
@@ -33,30 +37,30 @@ names(plays) <- to_snake_case(names(plays))
 distance <- function(x1, y1, x2, y2) {
   sqrt((x2 - x1) ^ 2 + (y2 - y1) ^ 2)
 }
-vectorized_distance <- Vectorize(distance)
+# vectorized_distance <- Vectorize(distance)
 
 closest_opponent <- function(df) {
-  expand_grid(player_1 = df$nfl_id, player_2 = df$nfl_id) |>
-    filter(player_1 != player_2) |>
-    left_join(df, by = c("player_1" = "nfl_id")) |>
-    left_join(
-      select(df, nfl_id, x, y, team),
-      by = c("player_2" = "nfl_id"),
-      suffix = c("_1", "_2")
-    ) |>
-    filter(pff_role == "Pass Route" & team_1 != team_2) |>
-    mutate(dist = vectorized_distance(x_1, y_1, x_2, y_2)) |>
-    group_by(player_1) |>
-    summarise(closest_defender = min(dist)) |>
-    arrange(player_1) |>
-    mutate(player_1 = paste0("receiver_sep_", 1:length(player_1))) |>
-    pivot_wider(names_from = player_1, values_from = closest_defender) |>
-    mutate(
-      game_id = df$game_id[1],
-      play_id = df$play_id[1],
-      frame_id = df$frame_id[1]
-    )
+  # we know there will be at least one rusher
+  defense <- df$team[df$pff_role == "Pass Rush"][[1]]
   
+  df <- df[order(df$nfl_id),]
+  x1 <- subset(df, pff_role == "Pass Route")$x
+  y1 <- subset(df, pff_role == "Pass Route")$y
+  x2 <- subset(df, team == defense)$x
+  y2 <- subset(df, team == defense)$y
+  
+  gaps <-
+    c(min_dists(x1, y1, x2, y2),
+      df$game_id[[1]],
+      df$play_id[[1]],
+      df$frame_id[[1]])
+  names(gaps) <-
+    c(paste0("receiver_sep_", 1:length(x1)),
+      "game_id",
+      "play_id",
+      "frame_id")
+  
+  return(gaps)
 }
 
 # we will consider defensive players as active rushers from the snap up until the earliest of these events
@@ -118,7 +122,7 @@ by_frame <- tracking |>
   mutate(
     qb_x = x[pff_role == "Pass"][1],
     qb_y = y[pff_role == "Pass"][1],
-    dist_from_qb = vectorized_distance(x, y, qb_x, qb_y),
+    dist_from_qb = distance(x, y, qb_x, qb_y),
     qb_in_tackle_box = qb_y > tackle_box_right &&
       qb_y < tackle_box_left
   ) |>
@@ -129,12 +133,14 @@ by_frame <- tracking |>
 
 blocker_coords <- by_frame |>
   ungroup() |>
+  group_by(game_id, play_id) |>
   filter(pff_role == "Pass Block") |>
-  select(game_id, play_id, nfl_id, frame_id, x, y) |>
   rename(x_blocker = x, y_blocker = y) |>
   mutate(nfl_id = as.numeric(as.factor(nfl_id))) |>
+  select(game_id, play_id, nfl_id, frame_id, x_blocker, y_blocker) |>
   pivot_wider(names_from = nfl_id,
-              values_from = c(x_blocker, y_blocker))
+              values_from = c(x_blocker, y_blocker)) |>
+  ungroup()
 
 ball_coords <- by_frame |>
   ungroup() |>
@@ -183,6 +189,6 @@ by_frame |>
       pre_snap_visitor_score - pre_snap_home_score
     )
   ) |>
-  select(-team,-pff_role,-home_team_abbr,-pre_snap_home_score,-pre_snap_visitor_score)  |>
+  select(-team,-pff_role,-home_team_abbr,-pre_snap_home_score,-pre_snap_visitor_score, -frame_id) |>
   toJSON() |>
   write(paste0(Sys.getenv("BIG_DATA_BOWL"), "data/dataset.json"))
