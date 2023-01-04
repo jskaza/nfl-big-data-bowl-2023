@@ -190,5 +190,4 @@ by_frame |>
     )
   ) |>
   select(-team,-pff_role,-home_team_abbr,-pre_snap_home_score,-pre_snap_visitor_score, -frame_id) |>
-  toJSON() |>
-  write(paste0(Sys.getenv("BIG_DATA_BOWL"), "data/dataset.json"))
+  write.csv(paste0(Sys.getenv("BIG_DATA_BOWL"), "data/dataset.csv"))
