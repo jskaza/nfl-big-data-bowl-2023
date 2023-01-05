@@ -43,7 +43,7 @@ closest_opponent <- function(df) {
   # we know there will be at least one rusher
   defense <- df$team[df$pff_role == "Pass Rush"][[1]]
   
-  df <- df[order(df$nfl_id),]
+  df <- df[order(df$nfl_id), ]
   x1 <- subset(df, pff_role == "Pass Route")$x
   y1 <- subset(df, pff_role == "Pass Route")$y
   x2 <- subset(df, team == defense)$x
@@ -96,10 +96,15 @@ by_frame <- tracking |>
       nfl_id,
       pff_role,
       pff_sack,
+      pff_hit,
+      pff_hurry,
       pff_position_lined_up
     ),
     by = c("game_id", "play_id", "nfl_id")
   )  |>
+  mutate(havoc = as.numeric(pff_sack == 1 |
+                              pff_hit == 1 | pff_hurry == 1)) |>
+  select(-pff_hit,-pff_hurry) |>
   group_by(game_id, play_id) |>
   # remove plays with no rushers
   filter(any(pff_role == "Pass Rush")) |>
@@ -110,12 +115,12 @@ by_frame <- tracking |>
   mutate(
     ball_start_x = x[nfl_id == 0][1],
     ball_start_y = y[nfl_id == 0][1],
-    standard_x = if_else(play_direction == "left", -(x - ball_start_x), x - ball_start_x),
-    standard_y = if_else(play_direction == "left", -(y - ball_start_y), y - ball_start_y),
+    standard_x = if_else(play_direction == "left",-(x - ball_start_x), x - ball_start_x),
+    standard_y = if_else(play_direction == "left",-(y - ball_start_y), y - ball_start_y),
     tackle_box_left = standard_y[pff_position_lined_up == "LT"][1],
     tackle_box_right = standard_y[pff_position_lined_up == "RT"][1]
   ) |>
-  select(-ball_start_x, -ball_start_y, -x, -y) |>
+  select(-ball_start_x,-ball_start_y,-x,-y) |>
   rename(x = standard_x, y = standard_y) |>
   ungroup() |>
   group_by(game_id, play_id, frame_id) |>
@@ -123,13 +128,22 @@ by_frame <- tracking |>
     qb_x = x[pff_role == "Pass"][1],
     qb_y = y[pff_role == "Pass"][1],
     dist_from_qb = distance(x, y, qb_x, qb_y),
-    qb_in_tackle_box = qb_y > tackle_box_right &&
-      qb_y < tackle_box_left
+    qb_in_tackle_box = if_else(qb_y > tackle_box_right &
+                                 qb_y < tackle_box_left, 1, 0)
   ) |>
   select(
-    -qb_x,-qb_y,-event,-snap_id,-end_id,-play_direction,-pff_position_lined_up,-tackle_box_right,-tackle_box_left
+    -qb_x,
+    -qb_y,
+    -event,
+    -snap_id,
+    -end_id,
+    -play_direction,
+    -pff_position_lined_up,
+    -tackle_box_right,
+    -tackle_box_left
   )
 
+tracking <- NULL # free up some mem
 
 blocker_coords <- by_frame |>
   ungroup() |>
@@ -189,5 +203,12 @@ by_frame |>
       pre_snap_visitor_score - pre_snap_home_score
     )
   ) |>
-  select(-team,-pff_role,-home_team_abbr,-pre_snap_home_score,-pre_snap_visitor_score, -frame_id) |>
+  select(
+    -team,
+    -pff_role,
+    -home_team_abbr,
+    -pre_snap_home_score,
+    -pre_snap_visitor_score,
+    -frame_id
+  ) |>
   write.csv(paste0(Sys.getenv("BIG_DATA_BOWL"), "data/dataset.csv"))
