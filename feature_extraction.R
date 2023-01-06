@@ -101,9 +101,9 @@ by_frame <- tracking |>
     ),
     by = c("game_id", "play_id", "nfl_id")
   )  |>
-  mutate(havoc = as.numeric(pff_sack == 1 |
-                              pff_hit == 1 | pff_hurry == 1)) |>
-  select(-pff_hit, -pff_hurry) |>
+  mutate(pressure = as.numeric(pff_sack == 1 |
+                                 pff_hit == 1 | pff_hurry == 1)) |>
+  select(-pff_hit,-pff_hurry,-pff_sack) |>
   group_by(game_id, play_id) |>
   # remove plays with no rushers
   filter(any(pff_role == "Pass Rush")) |>
@@ -114,12 +114,12 @@ by_frame <- tracking |>
   mutate(
     ball_start_x = x[team == "football"][1],
     ball_start_y = y[team == "football"][1],
-    standard_x = if_else(play_direction == "left", -(x - ball_start_x), x - ball_start_x),
-    standard_y = if_else(play_direction == "left", -(y - ball_start_y), y - ball_start_y),
+    standard_x = if_else(play_direction == "left",-(x - ball_start_x), x - ball_start_x),
+    standard_y = if_else(play_direction == "left",-(y - ball_start_y), y - ball_start_y),
     tackle_box_left = standard_y[pff_position_lined_up == "LT"][1],
     tackle_box_right = standard_y[pff_position_lined_up == "RT"][1]
   ) |>
-  select(-ball_start_x, -ball_start_y, -x, -y) |>
+  select(-ball_start_x,-ball_start_y,-x,-y) |>
   rename(x = standard_x, y = standard_y) |>
   ungroup() |>
   group_by(game_id, play_id, frame_id) |>
@@ -132,7 +132,14 @@ by_frame <- tracking |>
     n_blockers = sum(pff_role == "Pass Block", na.rm = T)
   ) |>
   select(
-    -qb_x,-qb_y,-event,-snap_id,-end_id,-play_direction,-tackle_box_right,-tackle_box_left
+    -qb_x,
+    -qb_y,
+    -event,
+    -snap_id,
+    -end_id,
+    -play_direction,
+    -tackle_box_right,
+    -tackle_box_left
   )
 
 tracking <- NULL # free up some mem
@@ -194,6 +201,12 @@ by_frame |>
     )
   ) |>
   select(
-    -team,-pff_role,-home_team_abbr,-pre_snap_home_score,-pre_snap_visitor_score,-frame_id,-pff_position_lined_up
+    -team,
+    -pff_role,
+    -home_team_abbr,
+    -pre_snap_home_score,
+    -pre_snap_visitor_score,
+    -frame_id,
+    -pff_position_lined_up
   ) |>
   write.csv(paste0(Sys.getenv("BIG_DATA_BOWL"), "/data/dataset.csv"))
