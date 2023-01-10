@@ -4,5 +4,5 @@
 .Ruserdata
 .Renviron
 .DS_Store
-.ipynb checkpoints
+.ipynb_checkpoints
 sandbox/*
